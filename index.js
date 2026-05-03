@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys')
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys')
 const axios = require('axios')
 const pino = require('pino')
 const QRCode = require('qrcode')
@@ -13,7 +13,6 @@ async function sendToTelegram(text) {
       text: text,
       parse_mode: 'HTML'
     })
-    console.log('Сообщение отправлено в Telegram')
   } catch (e) {
     console.error('Ошибка sendMessage:', e.response?.data || e.message)
   }
@@ -22,56 +21,48 @@ async function sendToTelegram(text) {
 async function sendQRToTelegram(qrString) {
   try {
     console.log('Генерирую QR...')
-    const dataUrl = await QRCode.toDataURL(qrString)
-    const base64 = dataUrl.split(',')[1]
-    const buffer = Buffer.from(base64, 'base64')
-
-    const params = new URLSearchParams()
-    params.append('chat_id', TELEGRAM_CHAT_ID)
-
-    const { default: FormData } = await import('form-data')
+    const buffer = await QRCode.toBuffer(qrString)
+    const FormData = require('form-data')
     const form = new FormData()
     form.append('chat_id', String(TELEGRAM_CHAT_ID))
     form.append('photo', buffer, { filename: 'qr.png', contentType: 'image/png' })
-
     await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendPhoto`, form, {
       headers: form.getHeaders()
     })
-    console.log('QR отправлен в Telegram!')
+    console.log('QR отправлен!')
   } catch (e) {
-    console.error('Ошибка sendQR:', e.response?.data || e.message)
-    await sendToTelegram('⚠️ QR готов но не смог отправить картинку. Ошибка: ' + (e.response?.data?.description || e.message))
+    console.error('Ошибка QR:', e.response?.data || e.message)
   }
 }
 
 async function startBot() {
   console.log('Запускаю бота...')
-  await sendToTelegram('🚀 Бот запускается, жди QR код...')
-
   const { state, saveCreds } = await useMultiFileAuthState('auth_info')
 
   const sock = makeWASocket({
     auth: state,
-    logger: pino({ level: 'silent' })
+    logger: pino({ level: 'silent' }),
+    browser: Browsers.macOS('Chrome'),
+    connectTimeoutMs: 60000,
+    retryRequestDelayMs: 2000
   })
 
   sock.ev.on('creds.update', saveCreds)
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
-      console.log('QR получен!')
+      console.log('QR получен, отправляю...')
       await sendQRToTelegram(qr)
     }
     if (connection === 'open') {
       console.log('WhatsApp подключён!')
-      await sendToTelegram('✅ WhatsApp подключён! Теперь буду пересылать сообщения.')
+      await sendToTelegram('✅ WhatsApp подключён! Буду пересылать сообщения.')
     }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode
       console.log('Соединение закрыто, код:', code)
       if (code !== DisconnectReason.loggedOut) {
-        console.log('Переподключаюсь...')
-        startBot()
+        setTimeout(() => startBot(), 3000)
       }
     }
   })
